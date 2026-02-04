@@ -1,5 +1,9 @@
 # dotgraph
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/cwood/dotgraph.svg)](https://pkg.go.dev/github.com/cwood/dotgraph)
+[![Go Report Card](https://goreportcard.com/badge/github.com/cwood/dotgraph)](https://goreportcard.com/report/github.com/cwood/dotgraph)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 A Go library for building graph-based system configuration and bootstrap scripts with dependency management, platform-specific execution, and clean logging.
 
 ## Features
