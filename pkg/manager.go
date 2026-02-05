@@ -9,19 +9,30 @@ import (
 type Manager interface {
 	Install(packages ...string) error
 	IsInstalled(pkg string) bool
+	Available() bool
 	Name() string
 }
 
-// NewManager creates a package manager based on the OS
+// Package manager priority by OS
+var managerPriority = map[string][]Manager{
+	"darwin": {&Homebrew{}},
+	"linux":  {&Yay{}, &Pacman{}},
+}
+
+// NewManager returns the first available package manager for the OS
 func NewManager(os string) Manager {
-	switch os {
-	case "darwin":
-		return &Homebrew{}
-	case "linux":
-		return &Yay{}
-	default:
+	managers, ok := managerPriority[os]
+	if !ok {
 		return &Noop{}
 	}
+
+	for _, m := range managers {
+		if m.Available() {
+			return m
+		}
+	}
+
+	return &Noop{}
 }
 
 // Noop is a no-op package manager for unsupported platforms
@@ -32,6 +43,10 @@ func (n *Noop) Install(packages ...string) error {
 }
 
 func (n *Noop) IsInstalled(pkg string) bool {
+	return false
+}
+
+func (n *Noop) Available() bool {
 	return false
 }
 

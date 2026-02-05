@@ -9,90 +9,92 @@ import (
 	"github.com/cwood/dotgraph/logger"
 )
 
-// Graph represents a dependency graph of stages
-type Graph struct {
-	stages   map[string]*GraphStage
+// Graph represents a dependency graph of stages.
+// The type parameter T is the application-specific config type.
+type Graph[T any] struct {
+	stages   map[string]*GraphStage[T]
 	platform string
 }
 
-// GraphStage represents a stage in the dependency graph
-type GraphStage struct {
+// GraphStage represents a stage in the dependency graph.
+// The type parameter T matches the Graph's config type.
+type GraphStage[T any] struct {
 	name         string
-	run          func(ctx context.Context) error
-	dependencies []*GraphStage
+	run          StageHandler[T]
+	dependencies []*GraphStage[T]
 	platform     string // Empty means all platforms
 	requires     []string
-	unless       []func(context.Context) bool
+	unless       []func(*Request[T]) bool
 	optional     bool
 	executed     bool
 	mu           sync.Mutex
 }
 
 // NewGraph creates a new dependency graph
-func NewGraph() *Graph {
-	return &Graph{
-		stages:   make(map[string]*GraphStage),
+func NewGraph[T any]() *Graph[T] {
+	return &Graph[T]{
+		stages:   make(map[string]*GraphStage[T]),
 		platform: runtime.GOOS,
 	}
 }
 
 // AddStage adds a stage to the graph
-func (g *Graph) AddStage(name string, run func(context.Context) error) *GraphStage {
-	stage := &GraphStage{
+func (g *Graph[T]) AddStage(name string, run StageHandler[T]) *GraphStage[T] {
+	stage := &GraphStage[T]{
 		name:         name,
 		run:          run,
-		dependencies: make([]*GraphStage, 0),
+		dependencies: make([]*GraphStage[T], 0),
 		requires:     make([]string, 0),
-		unless:       make([]func(context.Context) bool, 0),
+		unless:       make([]func(*Request[T]) bool, 0),
 	}
 	g.stages[name] = stage
 	return stage
 }
 
 // AddPlatform creates a platform-specific stage builder
-func (g *Graph) AddPlatform(platform string) *PlatformBuilder {
-	return &PlatformBuilder{
+func (g *Graph[T]) AddPlatform(platform string) *PlatformBuilder[T] {
+	return &PlatformBuilder[T]{
 		graph:    g,
 		platform: platform,
 	}
 }
 
 // AddMerge creates a merge node that waits for multiple stages
-func (g *Graph) AddMerge(name string, stages ...*GraphStage) *MergeBuilder {
+func (g *Graph[T]) AddMerge(name string, stages ...*GraphStage[T]) *MergeBuilder[T] {
 	// Create a no-op stage that just waits for dependencies
-	merge := &GraphStage{
+	merge := &GraphStage[T]{
 		name:         name,
-		run:          func(ctx context.Context) error { return nil },
+		run:          func(req *Request[T]) error { return nil },
 		dependencies: stages,
 		requires:     make([]string, 0),
-		unless:       make([]func(context.Context) bool, 0),
+		unless:       make([]func(*Request[T]) bool, 0),
 	}
 	g.stages[name] = merge
-	return &MergeBuilder{
+	return &MergeBuilder[T]{
 		graph:      g,
 		mergeStage: merge,
 	}
 }
 
 // MergeBuilder helps build stages after a merge point
-type MergeBuilder struct {
-	graph      *Graph
-	mergeStage *GraphStage
+type MergeBuilder[T any] struct {
+	graph      *Graph[T]
+	mergeStage *GraphStage[T]
 }
 
 // AddStage adds a stage that runs after the merge
-func (mb *MergeBuilder) AddStage(name string, run func(context.Context) error) *GraphStage {
+func (mb *MergeBuilder[T]) AddStage(name string, run StageHandler[T]) *GraphStage[T] {
 	stage := mb.graph.AddStage(name, run)
 	stage.dependencies = append(stage.dependencies, mb.mergeStage)
 	return stage
 }
 
 // Execute runs the graph, respecting dependencies
-func (g *Graph) Execute(ctx context.Context) error {
+func (g *Graph[T]) Execute(ctx context.Context, req *Request[T]) error {
 	logger.Info("Executing bootstrap graph", "stages", len(g.stages))
 
 	// Find root stages (no dependencies)
-	roots := make([]*GraphStage, 0)
+	roots := make([]*GraphStage[T], 0)
 	for _, stage := range g.stages {
 		if len(stage.dependencies) == 0 {
 			roots = append(roots, stage)
@@ -105,9 +107,9 @@ func (g *Graph) Execute(ctx context.Context) error {
 
 	for _, root := range roots {
 		wg.Add(1)
-		go func(s *GraphStage) {
+		go func(s *GraphStage[T]) {
 			defer wg.Done()
-			if err := g.executeStage(ctx, s); err != nil {
+			if err := g.executeStage(ctx, req, s); err != nil {
 				errChan <- err
 			}
 		}(root)
@@ -128,7 +130,7 @@ func (g *Graph) Execute(ctx context.Context) error {
 }
 
 // executeStage executes a stage and its dependents
-func (g *Graph) executeStage(ctx context.Context, stage *GraphStage) error {
+func (g *Graph[T]) executeStage(ctx context.Context, req *Request[T], stage *GraphStage[T]) error {
 	stage.mu.Lock()
 	if stage.executed {
 		stage.mu.Unlock()
@@ -147,7 +149,7 @@ func (g *Graph) executeStage(ctx context.Context, stage *GraphStage) error {
 
 	// Check unless conditions
 	for _, condition := range stage.unless {
-		if condition(ctx) {
+		if condition(req) {
 			logger.Debug("Skipping stage", "stage", stage.name, "reason", "unless condition met")
 			stage.mu.Lock()
 			stage.executed = true
@@ -158,18 +160,22 @@ func (g *Graph) executeStage(ctx context.Context, stage *GraphStage) error {
 
 	// Check required commands
 	for _, cmd := range stage.requires {
-		if !CommandExists(cmd)(ctx) {
-			logger.Debug("Skipping stage", "stage", stage.name, "reason", "missing requirement", "command", cmd)
-			stage.mu.Lock()
-			stage.executed = true
-			stage.mu.Unlock()
-			return nil
+		_, err := req.Services.Executor.LookPath(cmd)
+		if err != nil {
+			if stage.optional {
+				logger.Debug("Skipping stage", "stage", stage.name, "reason", "missing requirement", "command", cmd)
+				stage.mu.Lock()
+				stage.executed = true
+				stage.mu.Unlock()
+				return nil
+			}
+			return fmt.Errorf("stage %s requires command %s which is not available", stage.name, cmd)
 		}
 	}
 
 	// Execute the stage
 	logger.Stage(stage.name)
-	if err := stage.run(ctx); err != nil {
+	if err := stage.run(req); err != nil {
 		if stage.optional {
 			logger.Warn("Stage failed (optional)", "stage", stage.name, "error", err)
 		} else {
@@ -196,9 +202,9 @@ func (g *Graph) executeStage(ctx context.Context, stage *GraphStage) error {
 			}
 
 			wg.Add(1)
-			go func(s *GraphStage) {
+			go func(s *GraphStage[T]) {
 				defer wg.Done()
-				if err := g.executeStage(ctx, s); err != nil {
+				if err := g.executeStage(ctx, req, s); err != nil {
 					errChan <- err
 				}
 			}(dep)
@@ -218,8 +224,8 @@ func (g *Graph) executeStage(ctx context.Context, stage *GraphStage) error {
 }
 
 // findDependents finds stages that depend on the given stage
-func (g *Graph) findDependents(stage *GraphStage) []*GraphStage {
-	dependents := make([]*GraphStage, 0)
+func (g *Graph[T]) findDependents(stage *GraphStage[T]) []*GraphStage[T] {
+	dependents := make([]*GraphStage[T], 0)
 	for _, s := range g.stages {
 		for _, dep := range s.dependencies {
 			if dep == stage {
@@ -232,7 +238,7 @@ func (g *Graph) findDependents(stage *GraphStage) []*GraphStage {
 }
 
 // allDependenciesMet checks if all dependencies of a stage are executed
-func (g *Graph) allDependenciesMet(stage *GraphStage) bool {
+func (g *Graph[T]) allDependenciesMet(stage *GraphStage[T]) bool {
 	for _, dep := range stage.dependencies {
 		dep.mu.Lock()
 		executed := dep.executed
@@ -245,37 +251,37 @@ func (g *Graph) allDependenciesMet(stage *GraphStage) bool {
 }
 
 // After adds dependencies to this stage
-func (s *GraphStage) After(stages ...*GraphStage) *GraphStage {
+func (s *GraphStage[T]) After(stages ...*GraphStage[T]) *GraphStage[T] {
 	s.dependencies = append(s.dependencies, stages...)
 	return s
 }
 
 // Requires adds a command requirement (must exist in PATH)
-func (s *GraphStage) Requires(cmd string) *GraphStage {
+func (s *GraphStage[T]) Requires(cmd string) *GraphStage[T] {
 	s.requires = append(s.requires, cmd)
 	return s
 }
 
 // Unless adds a condition that skips the stage if true
-func (s *GraphStage) Unless(condition func(context.Context) bool) *GraphStage {
+func (s *GraphStage[T]) Unless(condition func(*Request[T]) bool) *GraphStage[T] {
 	s.unless = append(s.unless, condition)
 	return s
 }
 
 // Optional marks the stage as optional (won't fail the graph)
-func (s *GraphStage) Optional() *GraphStage {
+func (s *GraphStage[T]) Optional() *GraphStage[T] {
 	s.optional = true
 	return s
 }
 
 // PlatformBuilder helps build platform-specific stages
-type PlatformBuilder struct {
-	graph    *Graph
+type PlatformBuilder[T any] struct {
+	graph    *Graph[T]
 	platform string
 }
 
 // AddStage adds a platform-specific stage
-func (pb *PlatformBuilder) AddStage(name string, run func(context.Context) error) *GraphStage {
+func (pb *PlatformBuilder[T]) AddStage(name string, run StageHandler[T]) *GraphStage[T] {
 	stage := pb.graph.AddStage(name, run)
 	stage.platform = pb.platform
 	return stage
