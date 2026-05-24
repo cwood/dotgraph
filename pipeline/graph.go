@@ -91,7 +91,7 @@ func (mb *MergeBuilder[T]) AddStage(name string, run StageHandler[T]) *GraphStag
 
 // Execute runs the graph, respecting dependencies
 func (g *Graph[T]) Execute(ctx context.Context, req *Request[T]) error {
-	logger.Info("Executing bootstrap graph", "stages", len(g.stages))
+	logger.Info("Executing bootstrap graph (%d stages)", len(g.stages))
 
 	// Find root stages (no dependencies)
 	roots := make([]*GraphStage[T], 0)
@@ -140,7 +140,7 @@ func (g *Graph[T]) executeStage(ctx context.Context, req *Request[T], stage *Gra
 
 	// Check platform
 	if stage.platform != "" && stage.platform != g.platform {
-		logger.Debug("Skipping stage", "stage", stage.name, "reason", "platform mismatch", "expected", stage.platform, "current", g.platform)
+		logger.Debug("Skipping stage %s: platform mismatch (want %s, have %s)", stage.name, stage.platform, g.platform)
 		stage.mu.Lock()
 		stage.executed = true
 		stage.mu.Unlock()
@@ -150,7 +150,7 @@ func (g *Graph[T]) executeStage(ctx context.Context, req *Request[T], stage *Gra
 	// Check unless conditions
 	for _, condition := range stage.unless {
 		if condition(req) {
-			logger.Debug("Skipping stage", "stage", stage.name, "reason", "unless condition met")
+			logger.Debug("Skipping stage %s: unless condition met", stage.name)
 			stage.mu.Lock()
 			stage.executed = true
 			stage.mu.Unlock()
@@ -163,7 +163,7 @@ func (g *Graph[T]) executeStage(ctx context.Context, req *Request[T], stage *Gra
 		_, err := req.Services.Executor.LookPath(cmd)
 		if err != nil {
 			if stage.optional {
-				logger.Debug("Skipping stage", "stage", stage.name, "reason", "missing requirement", "command", cmd)
+				logger.Debug("Skipping stage %s: missing requirement %s", stage.name, cmd)
 				stage.mu.Lock()
 				stage.executed = true
 				stage.mu.Unlock()
@@ -177,7 +177,7 @@ func (g *Graph[T]) executeStage(ctx context.Context, req *Request[T], stage *Gra
 	logger.Stage(stage.name)
 	if err := stage.run(req); err != nil {
 		if stage.optional {
-			logger.Warn("Stage failed (optional)", "stage", stage.name, "error", err)
+			logger.Warn("Stage %s failed (optional): %v", stage.name, err)
 		} else {
 			return fmt.Errorf("stage %s failed: %w", stage.name, err)
 		}
