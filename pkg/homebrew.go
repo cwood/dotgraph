@@ -60,12 +60,12 @@ func (h *Homebrew) Bundle(brewfilePath string) error {
 	}
 
 	expandedPath := os.ExpandEnv(brewfilePath)
-	
-	result := dgexec.RunQuiet("brew", "bundle", "--file="+expandedPath)
+
+	result := dgexec.Run("brew", "bundle", "--file="+expandedPath)
 	if result.Success {
 		logger.Info("  ✓ Brewfile packages installed")
 		return nil
 	}
-	logger.Info("  ✗ Failed to install Brewfile packages - see log: %s", result.LogFile)
+	logger.Info("  ✗ Failed to install Brewfile packages")
 	return result.Error
 }

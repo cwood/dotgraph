@@ -14,19 +14,19 @@ func TestRealExecutor_Run_Success(t *testing.T) {
 
 	assert.True(t, result.Success)
 	assert.NoError(t, result.Error)
-	assert.Empty(t, result.LogFile)
+	assert.Equal(t, "hello\n", result.Stdout)
 }
 
 func TestRealExecutor_Run_Failure(t *testing.T) {
 	executor := NewRealExecutor()
 
-	// Run a command that will fail
-	result := executor.Run("false")
+	// A command that fails and writes to stderr; the output must be captured
+	// on the result rather than discarded into a log file.
+	result := executor.Run("sh", "-c", "echo oops >&2; exit 1")
 
 	assert.False(t, result.Success)
 	assert.Error(t, result.Error)
-	// Log file should be created on failure
-	assert.NotEmpty(t, result.LogFile)
+	assert.Contains(t, result.Stderr, "oops")
 }
 
 func TestRealExecutor_Run_CommandNotFound(t *testing.T) {
