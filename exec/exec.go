@@ -34,6 +34,19 @@ func Run(name string, args ...string) RunResult {
 	return run(name, args...)
 }
 
+// RunInteractive runs a command wired directly to the current terminal's
+// stdin, stdout, and stderr. Use it for prompt-driven commands such as
+// `gh auth login` that the output-capturing Run would break. Output is not
+// captured, so Stdout and Stderr on the result are empty.
+func RunInteractive(name string, args ...string) RunResult {
+	cmd := exec.Command(name, args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	err := cmd.Run()
+	return RunResult{Success: err == nil, Error: err}
+}
+
 func run(name string, args ...string) RunResult {
 	cmd := exec.Command(name, args...)
 
