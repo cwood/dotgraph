@@ -43,6 +43,11 @@ func (h *Homebrew) IsInstalled(pkg string) bool {
 	return cmd.Run() == nil
 }
 
+// Available checks if Homebrew is installed
+func (h *Homebrew) Available() bool {
+	return commandExists("brew")
+}
+
 // Name returns the name of the package manager
 func (h *Homebrew) Name() string {
 	return "homebrew"

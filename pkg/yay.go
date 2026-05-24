@@ -43,6 +43,11 @@ func (y *Yay) IsInstalled(pkg string) bool {
 	return cmd.Run() == nil
 }
 
+// Available checks if yay is installed
+func (y *Yay) Available() bool {
+	return commandExists("yay")
+}
+
 // Name returns the name of the package manager
 func (y *Yay) Name() string {
 	return "yay"
